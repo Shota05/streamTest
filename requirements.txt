@@ -1,0 +1,8 @@
+streamlit>=1.35
+pandas>=2.2
+numpy>=1.26
+altair>=5.3
+pyyaml>=6.0      # read/write YAML assumptions
+openpyxl>=3.1    # export to Excel if desired
+pytest>=8.0      # unit tests
+python-pptx>=0.6 # optional: investor slide export
