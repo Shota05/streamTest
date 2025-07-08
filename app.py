@@ -1,76 +1,119 @@
-# app.py
-import streamlit as st, pandas as pd, numpy as np, altair as alt
+"""
+Streamlit UI for the MVNO financial sandbox.
+Run locally with:   streamlit run app.py
+Deploy on Streamlit Cloud or any container.
+"""
 
-# ----------------------- parameters & defaults ----------------------------- #
-DEFAULTS = dict(
-    months=60,
-    gross_adds_k=20,           # thousands
-    marketing_k=200,           # €k
-    arpu=15.0,                 # €
-    churn_pct=2.0,             # %
-    cac_eff=10.0,              # adds gained per 1k€ spent
-    wholesale_fee=4.5,         # €/sub/month
-    opex_k=150,                # €k fixed
-    discount_rate=0.08,
-)
+import streamlit as st
+import pandas as pd
+import altair as alt
 
-def run_model(**kwargs):
-    p = {**DEFAULTS, **kwargs}
-    m = np.arange(p["months"])
-    df = pd.DataFrame(index=m)
-    df["Month"] = df.index + 1
-    # paid acquisitions: linear response to marketing
-    df["GrossAdds"] = p["gross_adds_k"] * 1e3 + p["marketing_k"] * p["cac_eff"]
-    # churn probability
-    df["ChurnRate"] = p["churn_pct"] / 100
-    subs = []
-    base = 0
-    for r in df.itertuples():
-        base += r.GrossAdds
-        churned = base * r.ChurnRate
-        base -= churned
-        subs.append(base)
-    df["Subscribers"] = subs
-    df["Revenue"] = df["Subscribers"] * p["arpu"]
-    df["Wholesale"] = df["Subscribers"] * p["wholesale_fee"]
-    df["OPEX"] = p["opex_k"] * 1e3
-    df["Marketing"] = p["marketing_k"] * 1e3
-    df["Cash"] = df["Revenue"] - (df["Wholesale"] + df["OPEX"] + df["Marketing"])
-    df["CumCash"] = df["Cash"].cumsum()
-    # summary
-    payback = int((df[df["CumCash"] > 0].index.min() or p["months"]) + 1)
-    discount = (1 + p["discount_rate"]) ** (df.index / 12)
-    npv = (df["Cash"] / discount).sum()
-    peak_cash = df["CumCash"].min()
-    summary = dict(payback_months=payback, npv=npv, peak_cash_need=-peak_cash)
-    return df.reset_index(drop=True), summary
+from finance_engine import run_model, load_defaults, __version__
 
-# ----------------------- Streamlit UI -------------------------------------- #
-st.set_page_config("MVNO Scenario Model", layout="wide")
-st.title("MVNO Financial Sandbox")
+st.set_page_config(page_title="MVNO Scenario Model", layout="wide")
+defaults = load_defaults()
 
-st.sidebar.header("Adjust Assumptions")
+# ---------------------------------------------------------------- sidebar ---
+st.sidebar.header("🔧 Assumptions")
 with st.sidebar.form("scenario"):
-    gross_adds_k   = st.slider("Organic gross adds (k/month)", 1, 50, DEFAULTS["gross_adds_k"])
-    marketing_k    = st.slider("Marketing spend (€k/month)", 0, 5000, DEFAULTS["marketing_k"])
-    arpu           = st.number_input("ARPU (€)", 5.0, 50.0, DEFAULTS["arpu"], 0.5)
-    churn_pct      = st.slider("Monthly churn (%)", 0.0, 10.0, DEFAULTS["churn_pct"], 0.1)
-    run = st.form_submit_button("Run")
-if run:
-    df, s = run_model(gross_adds_k=gross_adds_k,
-                      marketing_k=marketing_k,
-                      arpu=arpu,
-                      churn_pct=churn_pct)
-    kpi1, kpi2, kpi3 = st.columns(3)
-    kpi1.metric("Pay‑back (m)", s["payback_months"])
-    kpi2.metric("5‑yr NPV (€M)", f"{s['npv']/1e6:,.1f}")
-    kpi3.metric("Peak funding (€M)", f"{s['peak_cash_need']/1e6:,.1f}")
-    st.line_chart(df.set_index("Month")[["Subscribers"]])
-    st.altair_chart(
-        alt.Chart(df).mark_area().encode(
-            x="Month:Q", y="CumCash:Q", tooltip=["CumCash"]
-        ).properties(height=250),
-        use_container_width=True
+    gross_adds_k = st.slider(
+        "Organic gross adds (k / month)",
+        1,
+        100,
+        int(defaults["gross_adds_k"]),
     )
-    with st.expander("Monthly details"):
-        st.dataframe(df.head(36).style.format({"Revenue":"€{:.0f}", "CumCash":"€{:.0f}"}))
+    marketing_k = st.slider(
+        "Paid marketing (€k / month)",
+        0,
+        5000,
+        int(defaults["marketing_k"]),
+        step=50,
+    )
+    arpu = st.number_input(
+        "ARPU (€ / sub / month)",
+        5.0,
+        50.0,
+        float(defaults["arpu"]),
+        0.1,
+    )
+    churn_pct = st.slider(
+        "Monthly churn (%)",
+        0.0,
+        10.0,
+        float(defaults["churn_pct"]),
+        0.1,
+    )
+    submitted = st.form_submit_button("Run scenario")
+
+# ----------------------------------------------------------------- header ---
+st.title("📈 Dutch MVNO Scenario Model")
+st.caption(f"Model engine v{__version__}")
+
+# ----------------------------------------------------------------- results ---
+if submitted:
+    df, kpi = run_model(
+        gross_adds_k=gross_adds_k,
+        marketing_k=marketing_k,
+        arpu=arpu,
+        churn_pct=churn_pct,
+    )
+
+    # KPIs
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Pay‑back (months)", kpi["payback_months"] or "‒")
+    c2.metric("NPV – 5 yr @ 8 %", f"€{kpi['npv']/1e6:,.2f} M")
+    c3.metric("Peak funding need", f"€{kpi['peak_cash_need']/1e6:,.2f} M")
+    c4.metric("Subs at month 60", f"{kpi['sub_count_end']:,}")
+
+    # Charts
+    base_tab, cash_tab, table_tab = st.tabs(
+        ["📊 Subscribers", "💶 Cash", "📜 Table"]
+    )
+
+    with base_tab:
+        st.altair_chart(
+            alt.Chart(df)
+            .mark_line()
+            .encode(x="Month:Q", y="Subscribers:Q")
+            .properties(height=300),
+            use_container_width=True,
+        )
+
+    with cash_tab:
+        st.altair_chart(
+            alt.Chart(df)
+            .mark_area()
+            .encode(x="Month:Q", y="CumCash:Q")
+            .properties(height=300),
+            use_container_width=True,
+        )
+
+    with table_tab:
+        st.dataframe(
+            df[
+                [
+                    "Month",
+                    "Subscribers",
+                    "Revenue",
+                    "EBIT",
+                    "Cash",
+                    "CumCash",
+                ]
+            ].style.format({"Revenue": "€{:.0f}", "CumCash": "€{:.0f}"}),
+            height=600,
+        )
+
+    # Download
+    with st.expander("Download monthly table (Excel)"):
+        buf = pd.ExcelWriter("projection.xlsx", engine="openpyxl")
+        df.to_excel(buf, index=False, sheet_name="Projection")
+        buf.close()
+        with open("projection.xlsx", "rb") as f:
+            st.download_button(
+                "Download Excel",
+                f,
+                file_name="mvno_projection.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+else:
+    st.info("Use the controls in the sidebar to run a scenario.")

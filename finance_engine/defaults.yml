@@ -1,0 +1,10 @@
+months: 60 # projection horizon
+gross_adds_k: 20 # organic gross adds, thousands / month
+marketing_k: 200 # €k / month paid media
+arpu: 15.0 # € / sub / month
+churn_pct: 2.0 # % / month
+cac_eff: 10.0 # subs gained per 1 k€ MKT spend
+wholesale_fee: 4.5 # € / sub / month paid to host MNO
+opex_k: 150 # €k fixed operating cost / month
+discount_rate: 0.08 # WACC for NPV
+tax_rate: 0.25 # simple flat tax for profit calc
